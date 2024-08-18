@@ -1,0 +1,119 @@
+# main.tf
+
+# Provider Configuration
+provider "aws" {
+  region     = "ap-south-1"
+  access_key = "YOUR_ACCESS_KEY"
+  secret_key = "YOUR_SECRET_KEY"
+}
+
+# VPC Configuration
+resource "aws_vpc" "example_vpc" {
+  cidr_block = "10.0.0.0/16"
+
+  # Attach Internet Gateway to VPC
+  tags = {
+    Name = "example-vpc"
+  }
+}
+
+# Internet Gateway
+resource "aws_internet_gateway" "example_igw" {
+  vpc_id = aws_vpc.example_vpc.id
+
+  tags = {
+    Name = "example-igw"
+  }
+}
+
+# Subnet Configuration
+resource "aws_subnet" "example_subnets" {
+  count             = 2
+  vpc_id            = aws_vpc.example_vpc.id
+  cidr_block        = "10.0.${10 + count.index}.0/24"
+  availability_zone = "ap-south-1${element(["a", "b"], count.index)}"   # Ensure subnets are in different availability zones
+}
+
+# Security Group Allow All Traffic
+resource "aws_security_group" "example_sg" {
+  name        = "example_sg"
+  description = "Allow all traffic"
+  vpc_id      = aws_vpc.example_vpc.id
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# EC2 Instance with UserData
+resource "aws_instance" "example" {
+  ami           = "ami-0451f2687182e0411"
+  instance_type = "t2.micro"
+  key_name      = "samplekeypair"
+  subnet_id     = aws_subnet.example_subnets[0].id
+
+  user_data = <<-EOF
+              #!/bin/bash
+              yum update -y
+              yum install httpd -y
+              systemctl start httpd
+              systemctl enable httpd
+              EOF
+
+  tags = {
+    Name = "example-instance"
+  }
+
+  # Security Group Configuration
+  vpc_security_group_ids = [aws_security_group.example_sg.id]
+}
+
+# Auto Scaling Group with Launch Template
+resource "aws_launch_template" "example_lt" {
+  name_prefix   = "example-lt"
+  image_id      = "ami-0451f2687182e0411"
+  instance_type = "t2.micro"
+  key_name      = "samplekeypair"
+}
+
+resource "aws_autoscaling_group" "example_asg" {
+  launch_template {
+    id = aws_launch_template.example_lt.id
+  }
+  min_size          = 2
+  max_size          = 2
+  desired_capacity  = 2
+
+  tag {
+    key                 = "Name"
+    value               = "example-instance"
+    propagate_at_launch = true
+  }
+
+  vpc_zone_identifier = [aws_subnet.example_subnets[0].id, aws_subnet.example_subnets[1].id]
+}
+
+# Load Balancer
+resource "aws_lb" "example_lb" {
+  name               = "example-lb"
+  internal           = false
+  load_balancer_type = "application"
+  subnets            = [aws_subnet.example_subnets[0].id, aws_subnet.example_subnets[1].id]
+
+  security_groups    = [aws_security_group.example_sg.id]
+}
+
+# Output Public IP of the EC2 instance
+output "public_ip" {
+  value = aws_instance.example.public_ip
+}
